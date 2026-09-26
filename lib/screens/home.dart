@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ip_tv/model/channel.dart';
 import 'package:ip_tv/model/stream_source.dart';
 import 'package:ip_tv/screens/player.dart';
@@ -23,6 +24,8 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
   bool _isLoading = true;
 
   final TextEditingController searchController = TextEditingController();
+  final FocusNode searchFocusNode = FocusNode();
+  final FocusNode _gridFocusNode = FocusNode();
   final SpeechToText _speech = SpeechToText();
   bool _speechAvailable = false;
   bool _isListening = false;
@@ -37,6 +40,8 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     searchController.dispose();
+    searchFocusNode.dispose();
+    _gridFocusNode.dispose();
     _speech.stop();
     super.dispose();
   }
@@ -58,12 +63,14 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
     setState(() => _isListening = true);
     await _speech.listen(
       onResult: _onSpeechResult,
-      listenFor: const Duration(seconds: 10),
-      pauseFor: const Duration(seconds: 2),
-      partialResults: true,
-      localeId: 'en_IN',
-      cancelOnError: true,
-      listenMode: ListenMode.search,
+      listenOptions: SpeechListenOptions(
+        listenFor: const Duration(seconds: 10),
+        pauseFor: const Duration(seconds: 2),
+        partialResults: true,
+        localeId: 'en_IN',
+        cancelOnError: true,
+        listenMode: ListenMode.search,
+      ),
     );
   }
 
@@ -78,7 +85,10 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
     searchController.selection =
         TextSelection.fromPosition(TextPosition(offset: words.length));
     _filterChannels(words);
-    if (result.finalResult) _stopListening();
+    if (result.finalResult) {
+      _stopListening();
+      searchFocusNode.unfocus();
+    }
   }
 
   void _filterChannels(String query) {
@@ -203,11 +213,24 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
   Widget sampleVideoGrid() {
     return Column(
       children: [
-        Padding(
+        Focus(
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent &&
+                event.logicalKey == LogicalKeyboardKey.arrowDown) {
+              searchFocusNode.unfocus();
+              _gridFocusNode.requestFocus();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
           child: TextField(
             controller: searchController,
+            focusNode: searchFocusNode,
             onChanged: _filterChannels,
+            onSubmitted: (_) => searchFocusNode.unfocus(),
+            textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               hintText: 'Search channels...',
               prefixIcon: const Icon(Icons.search),
@@ -237,9 +260,13 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
               border: const OutlineInputBorder(),
             ),
           ),
+          ),
         ),
         Expanded(
-          child: SingleChildScrollView(
+          child: Focus(
+            focusNode: _gridFocusNode,
+            child:
+          SingleChildScrollView(
             child: Column(
               children: [
                 GridView(
@@ -301,6 +328,7 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
                 ),
               ],
             ),
+          ),
           ),
         ),
       ],
