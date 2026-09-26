@@ -6,6 +6,7 @@ import 'package:ip_tv/model/stream_source.dart';
 import 'package:ip_tv/screens/player.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../provider/channels_provider.dart';
 
 class Home extends StatefulWidget {
@@ -15,7 +16,7 @@ class Home extends StatefulWidget {
   State<Home> createState() => _Home();
 }
 
-class _Home extends State<Home> with SingleTickerProviderStateMixin {
+class _Home extends State<Home> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   List<Channel> channels = [];
   List<Channel> filteredChannels = [];
   List<StreamSource> streamSources = [];
@@ -33,12 +34,26 @@ class _Home extends State<Home> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WakelockPlus.enable();
     _initSpeech();
     fetchStreamSources();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      WakelockPlus.enable();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      WakelockPlus.disable();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WakelockPlus.disable();
     searchController.dispose();
     searchFocusNode.dispose();
     _gridFocusNode.dispose();
