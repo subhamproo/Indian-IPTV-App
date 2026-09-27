@@ -41,6 +41,10 @@ class _Home extends State<Home>
   bool _speechAvailable = false;
   bool _isListening = false;
 
+  // When true: TextField shows but keyboard does NOT open on D-pad focus.
+  // Set to false only when the user explicitly presses OK on the search bar.
+  bool _searchReadOnly = true;
+
   static const String _spFavouritesKey = 'sp_favourites';
   static const String _spInitializedKey = 'sp_favs_initialized';
 
@@ -75,6 +79,17 @@ class _Home extends State<Home>
     }
   }
 
+  // Detect when the soft keyboard is dismissed (e.g. hardware Back key on TV).
+  // When keyboard closes while search is active, reset to read-only mode.
+  @override
+  void didChangeMetrics() {
+    final bottom = WidgetsBinding
+        .instance.platformDispatcher.views.first.viewInsets.bottom;
+    if (bottom == 0.0 && !_searchReadOnly && mounted) {
+      setState(() => _searchReadOnly = true);
+    }
+  }
+
   // ─── Favourites ──────────────────────────────────────────────────────────
 
   Future<void> _loadFavourites() async {
@@ -100,9 +115,15 @@ class _Home extends State<Home>
     );
   }
 
+  // Loads Sony Entertainment and Zee Bangla HD as default favourites.
+  // Runs only when either is missing — safe to call on every launch.
   Future<void> _loadDefaultFavourite() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_spInitializedKey) == true) return;
+    final needsSony = !_favourites
+        .any((f) => f.name.toLowerCase().contains('sony entertainment'));
+    final needsZee = !_favourites
+        .any((f) => f.name.toLowerCase().contains('zee bangla'));
+
+    if (!needsSony && !needsZee) return;
 
     final indianSource = streamSources.firstWhere(
       (s) => s.name.toLowerCase().contains('indian'),
@@ -114,17 +135,37 @@ class _Home extends State<Home>
     try {
       final tempProvider = ChannelsProvider();
       final data = await tempProvider.fetchM3UFile(indianSource.streamUrl);
-      final sony = data.firstWhere(
-        (c) => c.name.toLowerCase().contains('sony entertainment'),
-        orElse: () => Channel(name: '', logoUrl: '', streamUrl: ''),
-      );
-      if (sony.name.isNotEmpty && mounted) {
+      final List<Channel> toAdd = [];
+
+      if (needsSony) {
+        final sony = data.firstWhere(
+          (c) => c.name.toLowerCase().contains('sony entertainment'),
+          orElse: () => Channel(name: '', logoUrl: '', streamUrl: ''),
+        );
+        if (sony.name.isNotEmpty) toAdd.insert(0, sony);
+      }
+
+      if (needsZee) {
+        final zee = data.firstWhere(
+          (c) => c.name.toLowerCase().contains('zee bangla hd'),
+          orElse: () => data.firstWhere(
+            (c) => c.name.toLowerCase().contains('zee bangla'),
+            orElse: () => Channel(name: '', logoUrl: '', streamUrl: ''),
+          ),
+        );
+        if (zee.name.isNotEmpty) toAdd.add(zee);
+      }
+
+      if (toAdd.isNotEmpty && mounted) {
         setState(() {
-          if (!_favourites.any((f) => f.streamUrl == sony.streamUrl)) {
-            _favourites.insert(0, sony);
+          for (final ch in toAdd) {
+            if (!_favourites.any((f) => f.streamUrl == ch.streamUrl)) {
+              _favourites.add(ch);
+            }
           }
         });
         await _saveFavourites();
+        final prefs = await SharedPreferences.getInstance();
         await prefs.setBool(_spInitializedKey, true);
       }
     } catch (_) {}
@@ -163,15 +204,15 @@ class _Home extends State<Home>
     );
   }
 
-  // ─── Channel options dialog (OK press on any channel) ────────────────────
-  // On Android TV, both single press and hold show this dialog.
-  // The user picks Play or Add/Remove Favourite from the remote.
+  // ─── Channel options dialog ───────────────────────────────────────────────
+  // Shown on every OK press (single or hold) — two clear buttons for TV remote.
 
   void _showChannelOptions(Channel channel, {required bool isFavourite}) {
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
           padding: const EdgeInsets.all(28),
           child: Column(
@@ -187,7 +228,6 @@ class _Home extends State<Home>
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 24),
-              // ── Play ──────────────────────────────────────────────────────
               ElevatedButton.icon(
                 autofocus: true,
                 icon: const Icon(Icons.play_circle_fill, size: 28),
@@ -206,7 +246,6 @@ class _Home extends State<Home>
                 },
               ),
               const SizedBox(height: 12),
-              // ── Favourite toggle ──────────────────────────────────────────
               ElevatedButton.icon(
                 icon: Icon(
                   isFavourite ? Icons.star : Icons.star_border,
@@ -284,7 +323,8 @@ class _Home extends State<Home>
     _filterChannels(words);
     if (result.finalResult) {
       _stopListening();
-      searchFocusNode.unfocus();
+      setState(() => _searchReadOnly = true);
+      searchFocusNode.nextFocus();
     }
   }
 
@@ -320,6 +360,7 @@ class _Home extends State<Home>
       selectedSource = source;
       _showFavourites = false;
       searchController.clear();
+      _searchReadOnly = true;
     });
     _stopListening();
     try {
@@ -349,6 +390,7 @@ class _Home extends State<Home>
     setState(() {
       selectedSource = null;
       _showFavourites = false;
+      _searchReadOnly = true;
       channels = [];
       filteredChannels = [];
     });
@@ -373,10 +415,14 @@ class _Home extends State<Home>
       home: Scaffold(
         appBar: AppBar(
           title: Text(title),
+          // ExcludeFocus: hardware Back button handles navigation on TV.
+          // Keeping it in D-pad traversal would steal focus unexpectedly.
           leading: (_showFavourites || selectedSource != null)
-              ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: backToCategories,
+              ? ExcludeFocus(
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: backToCategories,
+                  ),
                 )
               : null,
         ),
@@ -412,12 +458,8 @@ class _Home extends State<Home>
 
     final actions = [
       () => setState(() => _showFavourites = true),
-      () {
-        if (indianSource.streamUrl.isNotEmpty) fetchChannels(indianSource);
-      },
-      () {
-        if (sportsSource.streamUrl.isNotEmpty) fetchChannels(sportsSource);
-      },
+      () { if (indianSource.streamUrl.isNotEmpty) fetchChannels(indianSource); },
+      () { if (sportsSource.streamUrl.isNotEmpty) fetchChannels(sportsSource); },
     ];
 
     return GridView.builder(
@@ -481,7 +523,7 @@ class _Home extends State<Home>
     );
   }
 
-  // ─── Favourites grid (no search, GridView.builder for proper D-pad nav) ──
+  // ─── Favourites grid ──────────────────────────────────────────────────────
 
   Widget _buildFavouritesGrid() {
     if (_isLoadingDefaults && _favourites.isEmpty) {
@@ -528,18 +570,32 @@ class _Home extends State<Home>
     );
   }
 
-  // ─── Channel grid (search + voice + GridView.builder for proper D-pad nav)
+  // ─── Channel grid (search + voice) ───────────────────────────────────────
 
   Widget _buildChannelGrid() {
     return Column(
       children: [
-        // Search bar — Down key moves focus to the grid
+        // ── Search bar ─────────────────────────────────────────────────────
+        // readOnly = true  → D-pad focuses bar, NO keyboard opens
+        // readOnly = false → user is typing (OK was pressed on the bar)
+        // ExcludeFocus on mic/clear so D-pad goes straight to channels
         Focus(
           onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.arrowDown) {
-              searchFocusNode.nextFocus();
-              return KeyEventResult.handled;
+            if (event is KeyDownEvent) {
+              // OK/Select while in read-only mode → open keyboard for typing
+              if ((event.logicalKey == LogicalKeyboardKey.select ||
+                      event.logicalKey == LogicalKeyboardKey.enter) &&
+                  _searchReadOnly) {
+                setState(() => _searchReadOnly = false);
+                searchFocusNode.requestFocus();
+                return KeyEventResult.handled;
+              }
+              // Down arrow while in read-only mode → jump to channel grid
+              if (event.logicalKey == LogicalKeyboardKey.arrowDown &&
+                  _searchReadOnly) {
+                searchFocusNode.nextFocus();
+                return KeyEventResult.handled;
+              }
             }
             return KeyEventResult.ignored;
           },
@@ -548,32 +604,44 @@ class _Home extends State<Home>
             child: TextField(
               controller: searchController,
               focusNode: searchFocusNode,
+              readOnly: _searchReadOnly,
               onChanged: _filterChannels,
-              onSubmitted: (_) => searchFocusNode.unfocus(),
+              onSubmitted: (_) {
+                // Search key / Done on keyboard → exit keyboard, go to grid
+                setState(() => _searchReadOnly = true);
+                searchFocusNode.nextFocus();
+              },
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: 'Search channels...',
+                hintText: _searchReadOnly
+                    ? 'Press OK to search channels...'
+                    : 'Type channel name...',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // ExcludeFocus: D-pad should not land on clear/mic buttons
                     if (searchController.text.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          searchController.clear();
-                          _filterChannels('');
-                        },
+                      ExcludeFocus(
+                        child: IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            searchController.clear();
+                            _filterChannels('');
+                          },
+                        ),
                       ),
-                    IconButton(
-                      icon: Icon(
-                        _isListening ? Icons.mic : Icons.mic_none,
-                        color: _isListening ? Colors.red : null,
+                    ExcludeFocus(
+                      child: IconButton(
+                        icon: Icon(
+                          _isListening ? Icons.mic : Icons.mic_none,
+                          color: _isListening ? Colors.red : null,
+                        ),
+                        tooltip: _isListening ? 'Stop' : 'Voice search',
+                        onPressed: _speechAvailable
+                            ? (_isListening ? _stopListening : _startListening)
+                            : null,
                       ),
-                      tooltip: _isListening ? 'Stop' : 'Voice search',
-                      onPressed: _speechAvailable
-                          ? (_isListening ? _stopListening : _startListening)
-                          : null,
                     ),
                   ],
                 ),
@@ -582,7 +650,8 @@ class _Home extends State<Home>
             ),
           ),
         ),
-        // GridView.builder — handles its own D-pad focus traversal and scrolling
+        // ── Channel grid ──────────────────────────────────────────────────
+        // GridView.builder handles its own D-pad focus traversal & scrolling.
         Expanded(
           child: filteredChannels.isEmpty
               ? const Center(
@@ -605,8 +674,9 @@ class _Home extends State<Home>
   }
 
   // ─── Channel tile ─────────────────────────────────────────────────────────
-  // On Android TV: pressing OK (select key) shows the options dialog.
-  // GestureDetector handles touch (emulator / phone).
+  // onKeyEvent handles the TV remote OK button.
+  // GestureDetector handles touch (phone/emulator).
+  // Focus border (amber) is always visible when tile has D-pad focus.
 
   Widget _buildChannelTile(Channel channel,
       {required bool isFavourite, bool autoFocus = false}) {
@@ -629,8 +699,7 @@ class _Home extends State<Home>
             duration: const Duration(milliseconds: 150),
             decoration: BoxDecoration(
               border: Border.all(
-                color:
-                    focused ? Colors.amber.shade700 : Colors.transparent,
+                color: focused ? Colors.amber.shade700 : Colors.transparent,
                 width: 4,
               ),
               color: focused
