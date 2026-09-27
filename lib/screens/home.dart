@@ -37,13 +37,14 @@ class _Home extends State<Home>
 
   final TextEditingController searchController = TextEditingController();
   final FocusNode searchFocusNode = FocusNode();
-  final FocusNode _gridFocusNode = FocusNode();
   final SpeechToText _speech = SpeechToText();
   bool _speechAvailable = false;
   bool _isListening = false;
 
   static const String _spFavouritesKey = 'sp_favourites';
   static const String _spInitializedKey = 'sp_favs_initialized';
+
+  // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -60,7 +61,6 @@ class _Home extends State<Home>
     WakelockPlus.disable();
     searchController.dispose();
     searchFocusNode.dispose();
-    _gridFocusNode.dispose();
     _speech.stop();
     super.dispose();
   }
@@ -74,6 +74,8 @@ class _Home extends State<Home>
       WakelockPlus.disable();
     }
   }
+
+  // ─── Favourites ──────────────────────────────────────────────────────────
 
   Future<void> _loadFavourites() async {
     final prefs = await SharedPreferences.getInstance();
@@ -109,7 +111,6 @@ class _Home extends State<Home>
     if (indianSource.streamUrl.isEmpty) return;
 
     if (mounted) setState(() => _isLoadingDefaults = true);
-
     try {
       final tempProvider = ChannelsProvider();
       final data = await tempProvider.fetchM3UFile(indianSource.streamUrl);
@@ -127,7 +128,6 @@ class _Home extends State<Home>
         await prefs.setBool(_spInitializedKey, true);
       }
     } catch (_) {}
-
     if (mounted) setState(() => _isLoadingDefaults = false);
   }
 
@@ -163,58 +163,82 @@ class _Home extends State<Home>
     );
   }
 
-  void _showSaveToFavouritesDialog(Channel channel) {
+  // ─── Channel options dialog (OK press on any channel) ────────────────────
+  // On Android TV, both single press and hold show this dialog.
+  // The user picks Play or Add/Remove Favourite from the remote.
+
+  void _showChannelOptions(Channel channel, {required bool isFavourite}) {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Save to Favourites?'),
-        content: Text(
-          channel.name,
-          style: const TextStyle(fontWeight: FontWeight.bold),
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                channel.name,
+                style: const TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 24),
+              // ── Play ──────────────────────────────────────────────────────
+              ElevatedButton.icon(
+                autofocus: true,
+                icon: const Icon(Icons.play_circle_fill, size: 28),
+                label: const Text('Play Channel',
+                    style: TextStyle(fontSize: 18)),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: Colors.green.shade700,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _openChannel(channel);
+                },
+              ),
+              const SizedBox(height: 12),
+              // ── Favourite toggle ──────────────────────────────────────────
+              ElevatedButton.icon(
+                icon: Icon(
+                  isFavourite ? Icons.star : Icons.star_border,
+                  size: 28,
+                  color: Colors.amber.shade700,
+                ),
+                label: Text(
+                  isFavourite
+                      ? 'Remove from Favourites'
+                      : 'Add to Favourites',
+                  style: const TextStyle(fontSize: 18),
+                ),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  isFavourite
+                      ? _removeFromFavourites(channel)
+                      : _addToFavourites(channel);
+                },
+              ),
+            ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.star),
-            label: const Text('Save'),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _addToFavourites(channel);
-            },
-          ),
-        ],
       ),
     );
   }
 
-  void _showRemoveFromFavouritesDialog(Channel channel) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove from Favourites?'),
-        content: Text(channel.name),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _removeFromFavourites(channel);
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade400),
-            child: const Text('Remove',
-                style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
+  // ─── Speech ───────────────────────────────────────────────────────────────
 
   Future<void> _initSpeech() async {
     final available = await _speech.initialize(
@@ -269,6 +293,8 @@ class _Home extends State<Home>
     if (mounted) setState(() => filteredChannels = result);
   }
 
+  // ─── Data loading ─────────────────────────────────────────────────────────
+
   Future<void> fetchStreamSources() async {
     try {
       final sources = await channelsProvider.fetchStreamSources();
@@ -306,7 +332,8 @@ class _Home extends State<Home>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('There was a problem loading channels')),
+          const SnackBar(
+              content: Text('There was a problem loading channels')),
         );
       }
       setState(() {
@@ -333,6 +360,8 @@ class _Home extends State<Home>
       CupertinoPageRoute(builder: (_) => Player(url: channel.streamUrl)),
     );
   }
+
+  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -362,6 +391,8 @@ class _Home extends State<Home>
     );
   }
 
+  // ─── Category grid ────────────────────────────────────────────────────────
+
   Widget _buildCategoryGrid() {
     final indianSource = streamSources.firstWhere(
       (s) => s.name.toLowerCase().contains('indian'),
@@ -375,7 +406,18 @@ class _Home extends State<Home>
     final items = [
       _CategoryItem(Icons.star, 'Favourites', Colors.amber.shade700),
       _CategoryItem(Icons.tv, indianSource.name, Colors.indigo.shade500),
-      _CategoryItem(Icons.sports_cricket, sportsSource.name, Colors.teal.shade600),
+      _CategoryItem(
+          Icons.sports_cricket, sportsSource.name, Colors.teal.shade600),
+    ];
+
+    final actions = [
+      () => setState(() => _showFavourites = true),
+      () {
+        if (indianSource.streamUrl.isNotEmpty) fetchChannels(indianSource);
+      },
+      () {
+        if (sportsSource.streamUrl.isNotEmpty) fetchChannels(sportsSource);
+      },
     ];
 
     return GridView.builder(
@@ -391,18 +433,19 @@ class _Home extends State<Home>
         final item = items[i];
         return Focus(
           autofocus: i == 0,
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent &&
+                (event.logicalKey == LogicalKeyboardKey.select ||
+                    event.logicalKey == LogicalKeyboardKey.enter)) {
+              actions[i]();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
           child: Builder(builder: (ctx2) {
             final focused = Focus.of(ctx2).hasFocus;
-            return InkWell(
-              onTap: () {
-                if (i == 0) {
-                  setState(() => _showFavourites = true);
-                } else if (i == 1 && indianSource.streamUrl.isNotEmpty) {
-                  fetchChannels(indianSource);
-                } else if (i == 2 && sportsSource.streamUrl.isNotEmpty) {
-                  fetchChannels(sportsSource);
-                }
-              },
+            return GestureDetector(
+              onTap: actions[i],
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 decoration: BoxDecoration(
@@ -438,6 +481,8 @@ class _Home extends State<Home>
     );
   }
 
+  // ─── Favourites grid (no search, GridView.builder for proper D-pad nav) ──
+
   Widget _buildFavouritesGrid() {
     if (_isLoadingDefaults && _favourites.isEmpty) {
       return const Center(
@@ -461,7 +506,7 @@ class _Home extends State<Home>
             Icon(Icons.star_border, size: 72, color: Colors.grey),
             SizedBox(height: 16),
             Text(
-              'No favourites yet.\n\nOpen Indian TV or Sports,\nthen hold OK on any channel to save it here.',
+              'No favourites yet.\n\nOpen Indian TV or Sports,\nthen press OK on any channel\nand choose Add to Favourites.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey, fontSize: 18),
             ),
@@ -470,33 +515,30 @@ class _Home extends State<Home>
       );
     }
 
-    return SingleChildScrollView(
-      child: GridView(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 5,
-        ),
-        children: _favourites.asMap().entries.map((entry) {
-          return _buildChannelTile(
-            entry.value,
-            isFavourite: true,
-            autoFocus: entry.key == 0,
-          );
-        }).toList(),
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 5,
+      ),
+      itemCount: _favourites.length,
+      itemBuilder: (ctx, i) => _buildChannelTile(
+        _favourites[i],
+        isFavourite: true,
+        autoFocus: i == 0,
       ),
     );
   }
 
+  // ─── Channel grid (search + voice + GridView.builder for proper D-pad nav)
+
   Widget _buildChannelGrid() {
     return Column(
       children: [
+        // Search bar — Down key moves focus to the grid
         Focus(
           onKeyEvent: (node, event) {
             if (event is KeyDownEvent &&
                 event.logicalKey == LogicalKeyboardKey.arrowDown) {
-              searchFocusNode.unfocus();
-              _gridFocusNode.requestFocus();
+              searchFocusNode.nextFocus();
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;
@@ -540,48 +582,62 @@ class _Home extends State<Home>
             ),
           ),
         ),
+        // GridView.builder — handles its own D-pad focus traversal and scrolling
         Expanded(
-          child: Focus(
-            focusNode: _gridFocusNode,
-            child: SingleChildScrollView(
-              child: GridView(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 5,
+          child: filteredChannels.isEmpty
+              ? const Center(
+                  child: Text('No channels found',
+                      style: TextStyle(color: Colors.grey, fontSize: 18)))
+              : GridView.builder(
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 5,
+                  ),
+                  itemCount: filteredChannels.length,
+                  itemBuilder: (ctx, i) => _buildChannelTile(
+                    filteredChannels[i],
+                    isFavourite: false,
+                  ),
                 ),
-                children: filteredChannels
-                    .map((ch) => _buildChannelTile(ch, isFavourite: false))
-                    .toList(),
-              ),
-            ),
-          ),
         ),
       ],
     );
   }
 
+  // ─── Channel tile ─────────────────────────────────────────────────────────
+  // On Android TV: pressing OK (select key) shows the options dialog.
+  // GestureDetector handles touch (emulator / phone).
+
   Widget _buildChannelTile(Channel channel,
       {required bool isFavourite, bool autoFocus = false}) {
     return Focus(
       autofocus: autoFocus,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.enter)) {
+          _showChannelOptions(channel, isFavourite: isFavourite);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
       child: Builder(builder: (ctx) {
         final focused = Focus.of(ctx).hasFocus;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: focused ? Colors.amber.shade700 : Colors.transparent,
-              width: 4,
+        return GestureDetector(
+          onTap: () => _showChannelOptions(channel, isFavourite: isFavourite),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color:
+                    focused ? Colors.amber.shade700 : Colors.transparent,
+                width: 4,
+              ),
+              color: focused
+                  ? Colors.amber.shade700.withOpacity(0.10)
+                  : null,
+              borderRadius: BorderRadius.circular(8),
             ),
-            color: focused ? Colors.amber.shade700.withOpacity(0.10) : null,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: InkWell(
-            onTap: () => _openChannel(channel),
-            onLongPress: isFavourite
-                ? () => _showRemoveFromFavouritesDialog(channel)
-                : () => _showSaveToFavouritesDialog(channel),
             child: Padding(
               padding: const EdgeInsets.all(1.0),
               child: Column(
